@@ -1,0 +1,216 @@
+---
+title: "Practical Machine Learning Course Project"
+author: "Venkat Gullapalli"
+date: "February 18, 2015"
+output: html_document
+---
+
+## Synopsis
+
+Using devices such as Jawbone Up, Nike FuelBand, and Fitbit it is now possible to collect a large amount of data about personal activity relatively inexpensively. These type of devices are part of the quantified self movement – a group of enthusiasts who take measurements about themselves regularly to improve their health, to find patterns in their behavior, or because they are tech geeks. One thing that people regularly do is quantify how much of a particular activity they do, but they rarely quantify how well they do it. They were asked to perform barbell lifts correctly and incorrectly in 5 different ways. More information is available from the website here: http://groupware.les.inf.puc-rio.br/har (see the section on the Weight Lifting Exercise Dataset). 
+The goal of our project is to predict the manner in which they did the exercise. This is the "classe" variable in the training set. We use data from accelerometers on the belt, forearm, arm, and dumbell of 6 participants. 
+
+## Question
+
+In the aforementioned study, six participants participated in a dumbell lifting exercise five different ways. The five ways, as described in the study, were “exactly according to the specification (Class A), throwing the elbows to the front (Class B), lifting the dumbbell only halfway (Class C), lowering the dumbbell only halfway (Class D) and throwing the hips to the front (Class E). Class A corresponds to the specified execution of the exercise, while the other 4 classes correspond to common mistakes.”
+
+By processing data gathered from accelerometers on the belt, forearm, arm, and dumbell of the participants in a machine learning algorithm, the question is can the appropriate activity quality (class A-E) be predicted?
+
+## Dependencies
+
+dplyr,  lattice, caret, ggplot2, rattle, knitr, kernlab, reshape2, rpart, randomForest and markdown are required libraries.
+
+```{r installLibraries, echo=FALSE}
+is.installed <- function(mypkg) {
+  is.element(mypkg, installed.packages()[,1])
+}
+
+if(!is.installed("dplyr")) { install.packages("dplyr",quiet=TRUE, warn.conflicts=FALSE) }
+if(!is.installed("lattice")) { install.packages("lattice", quiet=TRUE)}
+if(!is.installed("caret")) { install.packages("caret", quiet=TRUE)}
+if(!is.installed("ggplot2")) { install.packages("ggplot2", quiet=TRUE)}
+if(!is.installed("rattle")) { install.packages("rattle", quiet=TRUE)}
+if(!is.installed("knitr")) { install.packages("markdown",quiet=TRUE) }
+if(!is.installed("kernlab")) { install.packages("kernlab", quiet=TRUE)}
+if(!is.installed("reshape2")) { install.packages("reshape2", quiet=TRUE)}
+if(!is.installed("rpart")) { install.packages("rpart", quiet=TRUE)}
+if(!is.installed("randomForest")) { install.packages("randomForest", quiet=TRUE)}
+if(!is.installed("markdown")) { install.packages("markdown",quiet=TRUE) }
+
+suppressMessages(library(dplyr))
+suppressMessages(library(lattice))
+suppressMessages(library(caret))
+suppressMessages(library(ggplot2))
+suppressMessages(library(rattle))
+suppressMessages(library(knitr))
+suppressMessages(library(kernlab))
+suppressMessages(library(reshape2))
+suppressMessages(library(rpart))
+suppressMessages(library(randomForest))
+suppressMessages(library(markdown))
+```
+
+## Input Data
+
+Source of data: http://groupware.les.inf.puc-rio.br/har.
+
+The training data is downloaded and loaded into a dataframe "traindf" from https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv
+
+The test data is downloaded and loaded into a dataframe "testdf" from https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv
+
+While loading training and testing data, consider "NA" and "" values in dataset as "NA".
+
+```{r downloadAndReadFile, cache=TRUE, echo=FALSE}
+trainfile <- tempfile()
+testfile <- tempfile()
+if (!file.exists("pml-training.csv")) {
+download.file("https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv", "pml-training.csv", method="curl", quiet=TRUE) 
+}
+if (!file.exists("pml-testing.csv")) {
+download.file("https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv", "pml-testing.csv", method="curl", quiet=TRUE) 
+}
+traindf <- tbl_df(read.csv("pml-training.csv", na.strings=c("NA",""), header=TRUE))
+testdf <- tbl_df(read.csv("pml-testing.csv", na.strings=c("NA",""), header=TRUE))
+```
+
+## Exploratory Analysis to tidy data
+
+Checking data for NAs  to see how they will impact in prediction model
+
+```{r checkNAs}
+trainvalues <- colSums(is.na(traindf))
+testvalues <- colSums(is.na(testdf))
+summary(as.factor(trainvalues))
+summary(as.factor(testvalues))
+```
+
+There are 100 columns with all NAs and 60 columns with no NAs. Select only columns with no NAs.
+
+```{r selectNonNAs}
+traindf <- traindf[,trainvalues==0]
+testdf <- testdf[,testvalues==0]
+```
+
+check if same column names exist in both training and test data
+
+```{r compareDatasets}
+all.equal(colnames(traindf),colnames(testdf))
+```
+
+We conclude training data and test data has same variables and are good for prediction since mismatch is only with one column name classe vs problem_id. 
+
+Further basic analysis by head(traindf) and head(testdf) revealed that first 7 columns are not relevant for prediction.
+Removing those columns from training and test data as well.
+
+```{r removeFirstSeven}
+traindf <- traindf[,-(1:7)]
+testdf <- testdf[,-(1:7)]
+```
+
+Histogram of class[A-E]
+
+```{r histogramTrainingData}
+qplot(traindf$classe,data=traindf,xlab="classe") + geom_histogram(colour="blue", fill="blue")
+```
+
+The histogram shows that all class[A-E] are likely as any other. This indicates that optimizing a classification algoritm for accuracy and minimizing overall out of sample error should provide good prediction model.
+
+## Prediction Model Selection
+
+1. Take smaller subset of training data
+2. Split training data to training and testing data
+3. Build multiple model with cross validation
+4. Compare accuracies to select model
+
+### Take smaller subset of training data
+Create a data partition, 25% of training data ( since it is huge dataset ). 
+```{r subsetData, cache=TRUE}
+set.seed(0)
+inSubTrain <- createDataPartition(y=traindf$classe, p=0.25, list=FALSE)
+subTraindf <- traindf[inSubTrain,]
+```
+
+### Split training data to training and testing data
+Split the 25% of data into 60% - training and 40% testing
+```{r splitSubsetData, cache=TRUE}
+set.seed(0)
+inSubTrain_Train <- createDataPartition(y=subTraindf$classe, p=0.6, list=FALSE)
+trainTraindf <- subTraindf[inSubTrain_Train,]
+trainTestdf <- subTraindf[-inSubTrain_Train,]
+```
+
+### Build multiple models with cross validation
+Models built are lvq - Learning Vector Quantization, rpart - Recursive Partitioning, svmRadial - Support Vector Machine, knn - K Nearest Neighbors, rf - Random Forest. Cross Validation method used with 4 folds and 3 repetitions
+```{r buildModels, cache=TRUE}
+control <- trainControl(method="cv", number=4, repeats=3, verboseIter=FALSE)
+set.seed(0)
+modelLvq <- train(trainTraindf$classe~., data=trainTraindf, method="lvq", trControl=control)
+set.seed(0)
+modelRpart <- train(trainTraindf$classe~., data=trainTraindf, method="rpart", trControl=control)
+set.seed(0)
+modelSvm <- train(trainTraindf$classe~., data=trainTraindf, method="svmRadial", trControl=control)
+set.seed(0)
+modelKnn <- train(trainTraindf$classe~., data=trainTraindf, method="knn", trControl=control)
+set.seed(0)
+modelRf <- train(trainTraindf$classe~., data=trainTraindf, method="rf", trControl=control)
+```
+
+### Compare accuracies to select model
+```{r compareModels}
+results <- resamples(list(LVQ=modelLvq, RPART=modelRpart, SVM=modelSvm, KNN=modelKnn, RF=modelRf))
+summary(results)
+bwplot(results)
+```
+
+Comparing the accuracy results, Random Forest modeling is the way to go.
+
+## Build prediction model with pre-process and cross validation
+
+Building Random Forest model with entire training dataset (70% - training, 30% - testing) instead of 25% subset used for model selection. 
+Model is built with preprocess and cross validation.
+
+```{r buildPredictionModel, cache=TRUE}
+set.seed(0)
+inTrain <- createDataPartition(y=traindf$classe, p=0.7, list=FALSE)
+trainTraindf <- traindf[inTrain,]
+trainTestdf <- traindf[-inTrain,]
+modelRf <- train(trainTraindf$classe~., data=trainTraindf, method="rf", preProcess=c("center", "scale"), trControl = control)
+```
+
+## Calculate accuracy and out of sample error
+
+Calculate predictions using the model built using training data against testing data. Both were partitioned of training data. 
+
+```{r findPredictions}
+predictions <- predict(modelRf,trainTestdf)
+```
+
+Create confusion matrix for predictions against actual class[A-E]
+
+```{r confusionMatrix}
+confusion <- confusionMatrix(predictions,trainTestdf$classe)
+accuracy <- round(confusion$overall['Accuracy'],digits=4)
+outOfSampleError <- 1-accuracy
+print(confusion)
+ggplot(melt(confusion$table), aes(Reference,Prediction, fill=value)) + 
+  xlab("Actual Classe") + 
+  ylab("Predicted Classe") +
+  geom_raster() + 
+  scale_fill_gradient(low="#FFFFFF", high="#000000")
+```
+
+Based on the confusion matrix, the model confidence is very high for predictions and this can be used as model for calculation.
+
+The accuracy of the model is `r accuracy`. The out of sample error is `r outOfSampleError` (The out of sample error is calculated as 1 - accuracy for predictions made against the cross-validation set).
+
+## Conclusion
+
+Considering that the test set is a sample size of 20, an accuracy rate of `r accuracy*100`% and out of sample error rate of `r outOfSampleError*100`% is sufficient to expect that few or none of the test samples will be mis-classified.
+Calculate predictions using this model against the testing data downloaded with 20 rows.
+
+```{r predictTestData}
+predictionsTestData <- predict(modelRf,testdf)
+print(predictionsTestData)
+```
+
+
